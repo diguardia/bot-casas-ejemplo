@@ -8,18 +8,15 @@ export function chooseMove(state: State): Movement {
   for (const row of state.tablero) {
     for (const cell of row) {
       // El prefijo identifica al dueño; las casillas vacías y neutrales se ignoran.
-      // [cell] usa el ID encontrado como clave del diccionario de respuesta.
-      // «as const» conserva el tipo literal "N" en lugar del tipo general string.
-      // Agregamos la pieza al resultado y seguimos buscando las demás.
-      if (cell.startsWith(state.jugador)) Object.assign(movements, { [cell]: "N" as const });
+      if (cell !== "" && cell !== "N" && cell.startsWith(state.jugador)) {
+        movements[cell] = "N";
+      }
     }
   }
-
 
   // Si el jugador no tiene piezas, no proponemos ningún movimiento.
   return movements;
 }
-
 
 
 
