@@ -7,6 +7,15 @@ export const app = express();
 // Este middleware interpreta los cuerpos con Content-Type: application/json.
 // Debe registrarse antes del endpoint para que req.body esté disponible.
 app.use(express.json());
+
+// Perfil público del bot. No requiere body ni autenticación.
+app.get("/profile", (req, res) => {
+  return res.status(200).json({
+    name: "Bot Xeneize",
+    colors: ["#003B73", "#FFCC00", "#003B73"],
+  });
+});
+
 // El motor solicita una decisión enviando el estado mediante POST /move.
 app.post("/move", move);
 

@@ -9,12 +9,12 @@ import { chooseMove } from "../src/strategy.js";
 // La URL relativa a este archivo permite encontrarlo sin depender del directorio actual.
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/state1.json", import.meta.url), "utf8"));
 
-test("elige piezas propias, ignora casas neutrales y no modifica el estado", () => {
+test("elige piezas propias, se acerca a casas neutrales y no modifica el estado", () => {
   // Validamos el fixture antes de pasarlo a la estrategia.
   assert.ok(isState(fixture));
   // Una copia profunda permite detectar si la estrategia modifica el tablero original.
   const original = structuredClone(fixture);
-  expect(chooseMove(fixture)).toEqual({ A1: "N" });
+  expect(chooseMove(fixture)).toEqual({ A1: "E" });
   expect(chooseMove({ ...fixture, jugador: "B" })).toEqual({ B2: "N" });
   expect(fixture).toEqual(original);
   // Sin piezas, la respuesta debe ser un diccionario vacío.
@@ -33,9 +33,19 @@ test.each(["A", "B"] as const)("mueve todas las fichas de %s sin modificar el es
   state.tablero[9][9] = "B4";
   const original = structuredClone(state);
   expect(chooseMove(state)).toEqual(jugador === "A"
-    ? { A1: "N", A2: "N", A3: "N" }
+    ? { A1: "E", A2: "O", A3: "N" }
     : { B2: "N", B3: "N", B4: "N" });
   expect(state).toEqual(original);
+});
+
+test("prioriza conquistar una casa alcanzable con el valor del dado", () => {
+  const state = structuredClone(fixture);
+  state.tablero.forEach(row => row.fill(""));
+  state.jugador = "A";
+  state.dado = 3;
+  state.tablero[3][3] = "A1";
+  state.tablero[3][6] = "N";
+  expect(chooseMove(state)).toEqual({ A1: "E" });
 });
 
 test.each(["A", "B"] as const)("devuelve un objeto vacío si %s no tiene fichas", jugador => {
@@ -63,7 +73,7 @@ test("POST /move valida el estado y devuelve un diccionario", async () => {
     for (const jugador of ["A", "B"]) {
       const response = await post(JSON.stringify({ ...fixture, jugador }));
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(jugador === "A" ? { A1: "N" } : { B2: "N" });
+      expect(await response.json()).toEqual(jugador === "A" ? { A1: "E" } : { B2: "N" });
     }
     // El endpoint también debe devolver todas las fichas de cada jugador.
     const multiple = structuredClone(fixture);
@@ -74,7 +84,7 @@ test("POST /move valida el estado y devuelve un diccionario", async () => {
       const response = await post(JSON.stringify({ ...multiple, jugador }));
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(jugador === "A"
-        ? { A1: "N", A2: "N", A3: "N" }
+        ? { A1: "E", A2: "O", A3: "N" }
         : { B2: "N", B3: "N" });
     }
     // Los tres resultados posibles del dado deben ser aceptados.
@@ -96,6 +106,26 @@ test("POST /move valida el estado y devuelve un diccionario", async () => {
     expect((await post("{invalid")).status).toBe(400);
   } finally {
     // Cerramos el servidor incluso si falla una aserción para liberar el puerto.
+    await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
+  }
+});
+
+test("GET /profile devuelve exactamente el perfil público del bot", async () => {
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+
+  try {
+    // No enviamos body ni autenticación: el perfil debe ser completamente público.
+    const response = await fetch(`http://127.0.0.1:${address.port}/profile`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/^application\/json\b/);
+    expect(await response.json()).toEqual({
+      name: "Bot Xeneize",
+      colors: ["#003B73", "#FFCC00", "#003B73"],
+    });
+  } finally {
     await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
   }
 });
