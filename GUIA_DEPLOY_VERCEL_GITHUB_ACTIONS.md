@@ -463,17 +463,62 @@ Los dos identificadores **no son contraseñas**, pero se guardarán como *secret
 - `VERCEL_ORG_ID`: valor de `orgId`;
 - `VERCEL_PROJECT_ID`: valor de `projectId`.
 
+En PowerShell se pueden leer por separado, evitando errores de copia:
+
+```powershell
+$vercelProject = Get-Content -Raw .vercel/project.json | ConvertFrom-Json
+$vercelProject.orgId
+$vercelProject.projectId
+```
+
+> [!IMPORTANT]
+> `VERCEL_ORG_ID` y `VERCEL_PROJECT_ID` identifican recursos; no autentican. La autenticación la aporta `VERCEL_TOKEN`. Los tres valores son necesarios para que el workflow no dependa de una sesión local.
+
 ## 8. Implementación III: crear la identidad de despliegue
 
 **Concepto aplicado:** un sistema automatizado necesita autenticarse sin intervención humana. El token funciona como credencial de la identidad que realiza el deploy; no es parte de la aplicación.
 
-1. Abrir la configuración de la cuenta de Vercel.
-2. Ir a **Tokens**.
-3. Crear un token con un nombre reconocible, por ejemplo `github-actions-bot-casas`.
-4. Si Vercel permite elegir alcance y vencimiento, usar el menor alcance y la menor duración compatibles con la práctica.
-5. Copiar el token en el momento: después podría no volver a mostrarse.
+### 8.1 No confundir cuenta, equipo y proyecto
+
+Vercel organiza los recursos en distintos niveles:
+
+| Nivel | Ejemplo | ¿Dónde se crea el token? |
+| --- | --- | --- |
+| Cuenta personal | El usuario con el que iniciamos sesión. | **Sí: aquí está la página Tokens.** |
+| Equipo o *team* | El espacio compartido que posee proyectos. | Se selecciona como alcance del token, pero el token no se crea desde la configuración del equipo. |
+| Proyecto | `bot-casas-ejemplo`. | No: la configuración del proyecto no contiene la página para crear tokens personales. |
+
+Si no aparece la opción **Tokens**, probablemente está seleccionado un equipo o se está mirando la configuración del proyecto. Cambiar al perfil personal desde el selector de la esquina superior izquierda.
+
+### 8.2 Crear el token desde Vercel
+
+1. Iniciar sesión en Vercel con la misma cuenta que tiene acceso al proyecto.
+2. Abrir directamente **[Vercel Account Tokens](https://vercel.com/account/tokens)**.
+3. Si Vercel muestra el contexto de un equipo, abrir el selector superior izquierdo y elegir la **cuenta personal**.
+4. Presionar **Create Token**.
+5. Escribir un nombre descriptivo, por ejemplo `github-actions-bot-casas`.
+6. Elegir el alcance que incluya la cuenta o el equipo propietario de `bot-casas-ejemplo`.
+7. Elegir un vencimiento adecuado para la práctica. En un entorno real se debe preferir una duración limitada y planificar su rotación.
+8. Confirmar con **Create Token**.
+9. Copiar inmediatamente el valor generado y mantenerlo temporalmente en un lugar seguro. Vercel puede mostrarlo una sola vez.
+
+El valor copiado completo será el contenido del secret `VERCEL_TOKEN`. No se debe copiar el nombre descriptivo ni el identificador del token.
+
+```text
+Nombre en Vercel: github-actions-bot-casas   ← etiqueta, no es el secreto
+Valor generado:    [cadena secreta]           ← guardar como VERCEL_TOKEN
+```
+
+### 8.3 Qué token necesitamos
+
+Para esta práctica necesitamos un **Vercel API token** utilizable por la CLI con `--token`. No necesitamos crear una aplicación OAuth, un *client secret* ni una variable de entorno del proyecto.
+
+Ejecutar `vercel login` localmente autentica la computadora del estudiante, pero esa sesión no existe dentro del runner temporal de GitHub. Por eso el workflow requiere un token explícito almacenado en GitHub.
 
 El token representa a una identidad. Quien lo posea puede realizar las acciones que su alcance permita. No debe escribirse en el YAML, un commit, una captura ni un mensaje.
+
+> [!CAUTION]
+> No pegar el token en el archivo `.github/workflows/deploy-vercel.yml`. El workflow contiene únicamente la referencia `${{ secrets.VERCEL_TOKEN }}`.
 
 ## 9. Implementación IV: configurar los secrets en GitHub
 
@@ -481,9 +526,11 @@ El token representa a una identidad. Quien lo posea puede realizar las acciones 
 
 En el repositorio de GitHub:
 
-1. abrir **Settings → Secrets and variables → Actions**;
-2. elegir **New repository secret**;
-3. crear exactamente estos tres secretos:
+1. abrir el repositorio, no el perfil personal de GitHub;
+2. entrar en **Settings → Secrets and variables → Actions**;
+3. seleccionar la pestaña **Secrets** dentro de **Actions secrets and variables**;
+4. elegir **New repository secret**;
+5. crear exactamente estos tres secretos, uno por uno:
 
 | Nombre | Contenido |
 | --- | --- |
@@ -491,9 +538,46 @@ En el repositorio de GitHub:
 | `VERCEL_ORG_ID` | `orgId` de `.vercel/project.json`. |
 | `VERCEL_PROJECT_ID` | `projectId` de `.vercel/project.json`. |
 
+Para cada secret, escribir el nombre exacto en **Name**, pegar únicamente su valor en **Secret** y presionar **Add secret**. Los nombres distinguen guiones bajos y deben coincidir con el workflow.
+
+### Alternativa mediante GitHub CLI
+
+También se pueden cargar sin abrir el navegador. Cada comando solicita el valor de forma interactiva:
+
+```powershell
+gh secret set VERCEL_TOKEN
+gh secret set VERCEL_ORG_ID
+gh secret set VERCEL_PROJECT_ID
+```
+
+No pasar el token como argumento del comando ni guardarlo en el historial de la terminal.
+
 GitHub cifra los secretos y oculta coincidencias en los logs, pero eso no vuelve seguro imprimirlos. Un workflow malicioso podría enviarlos a otro destino. Por eso los cambios a workflows requieren revisión.
 
 Los secrets no se entregan normalmente a workflows de pull requests provenientes de *forks*. Es una protección deliberada: código no confiable no debe obtener credenciales de despliegue.
+
+Verificar que los nombres quedaron registrados —GitHub no mostrará sus valores—:
+
+```powershell
+gh secret list --app actions
+```
+
+La salida debe incluir los tres nombres —las fechas pueden variar—:
+
+```text
+VERCEL_ORG_ID       Updated ...
+VERCEL_PROJECT_ID   Updated ...
+VERCEL_TOKEN        Updated ...
+```
+
+GitHub no permite recuperar el valor después de guardarlo. Esto es normal: se puede reemplazar un secret, pero no visualizarlo.
+
+Si la lista está vacía, expresiones como `${{ secrets.VERCEL_TOKEN }}` se convierten en una cadena vacía y Vercel informa que `--token` no recibió ningún valor. Después de crear o corregir los secrets:
+
+1. abrir **Actions** en el repositorio;
+2. seleccionar la ejecución fallida;
+3. usar **Re-run jobs → Re-run all jobs**;
+4. comprobar que el paso **Validar secrets requeridos** finalice correctamente.
 
 ```mermaid
 flowchart LR
@@ -548,8 +632,21 @@ jobs:
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
     steps:
+      - name: Validar secrets requeridos
+        shell: bash
+        run: |
+          missing=()
+          [ -z "$VERCEL_TOKEN" ] && missing+=(VERCEL_TOKEN)
+          [ -z "$VERCEL_ORG_ID" ] && missing+=(VERCEL_ORG_ID)
+          [ -z "$VERCEL_PROJECT_ID" ] && missing+=(VERCEL_PROJECT_ID)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Faltan GitHub Actions secrets: ${missing[*]}"
+            exit 1
+          fi
+
       - name: Descargar el repositorio
         uses: actions/checkout@v4
 
@@ -573,27 +670,27 @@ jobs:
 
       - name: Obtener configuración Preview
         if: github.event_name == 'pull_request'
-        run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
 
       - name: Construir Preview
         if: github.event_name == 'pull_request'
-        run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --token="$VERCEL_TOKEN"
 
       - name: Desplegar Preview
         if: github.event_name == 'pull_request'
-        run: vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --token="$VERCEL_TOKEN"
 
       - name: Obtener configuración Production
         if: github.event_name != 'pull_request'
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
 
       - name: Construir Production
         if: github.event_name != 'pull_request'
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --prod --token="$VERCEL_TOKEN"
 
       - name: Desplegar Production
         if: github.event_name != 'pull_request'
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
 ```
 
 ### Lectura del workflow, sección por sección
@@ -803,6 +900,7 @@ Diagnosticar una pipeline consiste en ubicar la primera frontera que no cumplió
 | `npm ci` falla por el lockfile | `package.json` y `package-lock.json` no coinciden | Ejecutar `npm install` localmente, revisar y versionar el lockfile actualizado. |
 | Tests o tipos fallan | El cambio no satisface la puerta de calidad | Reproducir con `npm run typecheck` y `npm test`; no saltar el paso. |
 | `No existing credentials found` o 401 | Token ausente, vencido o mal copiado | Revisar el nombre `VERCEL_TOKEN`, rotarlo y actualizar el secret. |
+| `You defined "--token", but it's missing a value` | `VERCEL_TOKEN` no existe en el repositorio o no está disponible para ese workflow | Crear el secret con ese nombre exacto; comprobarlo con `gh secret list --app actions` y volver a ejecutar el workflow. |
 | `Project not found` | `VERCEL_PROJECT_ID` o `VERCEL_ORG_ID` no corresponde al proyecto/scope | Volver a ejecutar `vercel link` y comparar `.vercel/project.json`. |
 | Los secrets aparecen vacíos en un PR | El PR viene de un fork o el nombre no coincide | Es la protección esperada para forks; no habilitar credenciales a código no confiable. |
 | Hay dos despliegues por commit | Git Integration y Actions están desplegando a la vez | Desactivar uno; en esta práctica el responsable es Actions. |
