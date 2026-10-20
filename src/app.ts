@@ -11,7 +11,7 @@ app.use(express.json());
 // Perfil público del bot. No requiere body ni autenticación.
 app.get("/profile", (req, res) => {
   return res.status(200).json({
-    name: "Bot Xeneize",
+    name: "Bot Boca",
     colors: ["#003B73", "#FFCC00", "#003B73"],
   });
 });
