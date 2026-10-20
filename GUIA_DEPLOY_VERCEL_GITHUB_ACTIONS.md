@@ -2,15 +2,42 @@
 
 Material de clase — **Diseño y Arquitectura de Despliegue I, UPC**
 
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI%2FCD-2088FF?logo=githubactions&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel-Serverless-000000?logo=vercel&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-API-3178C6?logo=typescript&logoColor=white)
+
 En esta práctica vamos a publicar el Bot de Casas, una API HTTP desarrollada con TypeScript y Express, y a automatizar sus despliegues con GitHub Actions. Al finalizar, cada cambio propuesto en un *pull request* podrá generar un ambiente de prueba (*Preview*) y cada cambio integrado en `master` podrá llegar al ambiente de producción.
 
 > La URL de la aplicación no muestra una página web. Este proyecto expone `POST /move`; por eso se prueba enviando JSON con PowerShell, `curl` o un cliente de APIs.
+
+> [!TIP]
+> Conviene leer primero las secciones 1 a 4 sin ejecutar comandos. Allí se construye el modelo mental; desde la sección 5 se aplica ese modelo al proyecto.
+
+## Mapa visual del recorrido
+
+```mermaid
+flowchart LR
+    A[Idea o cambio] --> B[Código y commit]
+    B --> C[Pull request]
+    C --> D{CI aprobada?}
+    D -- No --> E[Corregir y volver a intentar]
+    E --> B
+    D -- Sí --> F[Preview en Vercel]
+    F --> G{Revisión aprobada?}
+    G -- No --> E
+    G -- Sí --> H[Merge a master]
+    H --> I[Deployment de Production]
+    I --> J[Prueba de humo y observación]
+```
 
 ## 1. Objetivos de aprendizaje
 
 Al completar la práctica deberían poder:
 
+- diferenciar automatización, integración y orquestación;
 - distinguir compilación, integración continua y despliegue continuo;
+- describir evento, workflow, job, step, action, runner, artifact, environment y secret;
 - explicar qué responsabilidades tienen GitHub, GitHub Actions y Vercel;
 - adaptar un servidor Express persistente a una función *serverless*;
 - administrar credenciales mediante *secrets*;
@@ -44,68 +71,263 @@ npm run dev         # servidor local con recarga
 
 En un servidor tradicional, `src/server.ts` inicia un proceso que queda escuchando en un puerto. Vercel usa otro modelo: ante una solicitud ejecuta una función y le entrega la petición. Por eso la función debe **exportar** la aplicación Express y no debe ejecutar `app.listen`.
 
-## 3. Conceptos fundamentales
+## 3. Marco teórico: de un cambio de código a un despliegue
 
-### 3.1 CI y CD
+Antes de configurar herramientas conviene entender el problema que resuelven. Escribir código y ejecutarlo en una computadora no alcanza para operarlo de forma confiable. Entre un cambio y su llegada a usuarios aparecen preguntas como estas:
 
-**Integración continua (CI)** significa verificar automáticamente cada cambio. En esta práctica la verificación instala dependencias, controla tipos y ejecuta pruebas.
+- ¿el proyecto puede instalarse desde cero?;
+- ¿compila en una máquina distinta de la del desarrollador?;
+- ¿las pruebas siguen pasando?;
+- ¿qué versión exacta fue publicada?;
+- ¿quién autorizó que llegara a producción?;
+- ¿cómo volvemos a una versión anterior si falla?
 
-**Entrega o despliegue continuo (CD)** agrega la construcción y publicación. La automatización reduce pasos manuales, pero no elimina controles: una rama protegida, revisiones y pruebas siguen siendo importantes.
+Una **pipeline de entrega de software** es la secuencia automatizada de controles y transformaciones que responde esas preguntas. Recibe código fuente como entrada y puede producir evidencia de validación, artefactos y despliegues como salida.
 
-### 3.2 GitHub Actions
+### 3.1 Automatización, integración y orquestación
 
-GitHub Actions ejecuta *workflows* definidos como YAML en `.github/workflows/`. Un workflow se activa por eventos como `push`, `pull_request` o una ejecución manual. Contiene uno o más *jobs*, y cada job contiene pasos.
+Estos términos se relacionan, pero no son sinónimos:
 
-El *runner* de GitHub es una máquina temporal: parte limpia, clona el repositorio, instala lo necesario, ejecuta los comandos y luego se descarta. No debemos depender de archivos que solo existan en nuestra computadora.
+- **Automatización:** hacer que una tarea repetible se ejecute mediante instrucciones, por ejemplo `npm test`.
+- **Integración:** conectar sistemas para que intercambien información o disparen procesos. Por ejemplo, GitHub puede avisar que hubo un `push` y Vercel puede recibir un artefacto.
+- **Orquestación:** coordinar varias tareas, dependencias, condiciones, credenciales y resultados dentro de un flujo completo.
 
-### 3.3 Vercel y el modelo serverless
+GitHub Actions puede actuar como plataforma de **automatización y orquestación**. También integra GitHub con servicios externos, pero llamarlo solamente “un integrador” queda corto: además decide cuándo ejecutar, prepara máquinas, ordena tareas, evalúa condiciones, conserva resultados y reporta estados.
 
-Un **proyecto de Vercel** asocia código, configuración, dominios y despliegues. Cada despliegue es inmutable: produce una URL propia y no modifica el artefacto ya creado.
+### 3.2 Integración continua, entrega continua y despliegue continuo
 
-Una función *serverless* no es un servidor reservado permanentemente. La plataforma administra el proceso, el puerto, el escalado y el ciclo de vida. Nuestra responsabilidad es exportar el manejador. Consecuencias importantes:
+Las siglas **CI/CD** agrupan prácticas diferentes:
 
-- no llamar `listen` dentro de la función;
-- no guardar estado durable en memoria ni en el disco local;
-- no asumir que dos solicitudes llegarán a la misma instancia;
-- mantener las funciones pequeñas y controlar tiempos de ejecución.
-
-`src/app.ts` ya separa correctamente la configuración de Express del arranque. Reutilizaremos `app` desde un punto de entrada de Vercel y conservaremos `src/server.ts` para desarrollo local.
-
-### 3.4 Preview y Production
-
-| Ambiente | Cuándo se crea | Uso |
+| Práctica | Pregunta que responde | Resultado típico |
 | --- | --- | --- |
-| Preview | En esta guía, al abrir o actualizar un pull request | Probar un cambio aislado antes de integrarlo. |
-| Production | Al hacer push a `master` o ejecutar manualmente ese despliegue | Versión estable consumida por usuarios o sistemas. |
+| Integración continua (*Continuous Integration*) | ¿Este cambio puede integrarse sin romper el sistema? | Build y pruebas aprobados o rechazados. |
+| Entrega continua (*Continuous Delivery*) | ¿Existe una versión validada y lista para publicar? | Artefacto desplegable, con publicación de Production todavía aprobada manualmente. |
+| Despliegue continuo (*Continuous Deployment*) | ¿Todo cambio que supera los controles debe llegar automáticamente a Production? | Publicación automática después de las puertas de calidad. |
 
-Las variables de entorno y los dominios pueden ser diferentes por ambiente. Nunca se debe probar una modificación riesgosa directamente en producción.
+CI no significa solamente “usar un servidor de CI”. Es una práctica de integrar cambios pequeños y frecuentes, verificarlos automáticamente y obtener retroalimentación rápida. CD extiende esa práctica hasta la preparación o publicación del software.
 
-## 4. Arquitectura del flujo
+En esta clase implementaremos CI más despliegue continuo para `master`: un cambio debe superar controles automáticos y luego el pipeline lo publica. En una organización real podría agregarse una aprobación manual; en ese caso hablaríamos de entrega continua en ese último tramo.
 
-```text
-Desarrollador
-    │ git push / pull request
-    ▼
-GitHub
-    │ activa workflow
-    ▼
-GitHub Actions (runner temporal)
-    ├─ npm ci
-    ├─ npm run typecheck
-    ├─ npm test
-    ├─ vercel pull
-    ├─ vercel build
-    └─ vercel deploy --prebuilt
-             │
-             ▼
-          Vercel
-        ├─ Preview (PR)
-        └─ Production (master)
+### 3.3 ¿Qué es GitHub Actions?
+
+**GitHub Actions es la plataforma de automatización y CI/CD integrada en GitHub.** Observa eventos que ocurren alrededor de un repositorio y, de acuerdo con archivos de configuración versionados junto al código, ejecuta tareas en máquinas llamadas *runners*.
+
+Su modelo tiene las siguientes piezas:
+
+| Concepto | Significado | Ejemplo de esta clase |
+| --- | --- | --- |
+| Evento | Hecho que puede iniciar una automatización. | `pull_request`, `push`, ejecución manual. |
+| Workflow | Proceso automatizado completo, definido en YAML. | Validar y desplegar en Vercel. |
+| Job | Grupo de pasos que se ejecuta en un runner. | `validate-and-deploy`. |
+| Step | Unidad secuencial dentro de un job. | Ejecutar `npm test`. |
+| Action | Componente reutilizable que encapsula una tarea. | `actions/checkout` descarga el repositorio. |
+| Runner | Máquina que ejecuta un job. | Una VM temporal con Ubuntu. |
+| Secret | Dato cifrado que el workflow puede consumir sin versionarlo. | `VERCEL_TOKEN`. |
+| Variable | Configuración no secreta disponible durante la ejecución. | Un nombre de ambiente. |
+| Artifact | Archivo producido y conservado por una ejecución. | Reporte de pruebas o paquete compilado. |
+| Environment | Contexto lógico con variables, secretos y reglas propias. | `preview` o `production`. |
+
+#### Workflow, job, step y action no son lo mismo
+
+La jerarquía puede leerse así:
+
+```mermaid
+flowchart TB
+    E[Evento: push, pull_request o manual] --> W[Workflow YAML]
+    W --> JA[Job A: runner propio]
+    W --> JB[Job B: runner propio]
+    JA --> S1[Step: comando de shell]
+    JA --> S2[Step: action reutilizable]
+    JB --> S3[Step: otro comando]
+
+    classDef event fill:#fff4cc,stroke:#9a6700,color:#24292f
+    classDef workflow fill:#ddf4ff,stroke:#0969da,color:#24292f
+    classDef job fill:#dafbe1,stroke:#1a7f37,color:#24292f
+    classDef step fill:#f6f8fa,stroke:#57606a,color:#24292f
+    class E event
+    class W workflow
+    class JA,JB job
+    class S1,S2,S3 step
+```
+
+Un **workflow** describe la automatización completa. Un **job** reserva un runner y agrupa pasos. Los **steps** de un mismo job comparten el sistema de archivos y se ejecutan en orden. Los jobs, en cambio, son independientes y pueden ejecutarse en paralelo salvo que se declare una dependencia con `needs`.
+
+Una **action** no es el workflow entero: es una pieza reutilizable que se invoca desde un step. Por ejemplo, `actions/checkout@v4` evita tener que programar manualmente la descarga del repositorio.
+
+#### El runner y la reproducibilidad
+
+El runner hospedado por GitHub es una máquina temporal. Para cada job:
+
+1. se crea un entorno limpio;
+2. se descarga el código cuando el workflow lo solicita;
+3. se instalan dependencias y herramientas;
+4. se ejecutan los pasos;
+5. se reporta el resultado;
+6. se descarta la máquina.
+
+Esto explica por qué “en mi máquina funciona” no es evidencia suficiente. Si el pipeline necesita un archivo no versionado, una dependencia instalada globalmente o una credencial local, fallará. La automatización obliga a declarar las dependencias del proceso y mejora la reproducibilidad.
+
+#### ¿Qué garantiza GitHub Actions y qué no?
+
+Un workflow verde garantiza solamente que las instrucciones configuradas terminaron correctamente. No demuestra por sí solo que el software sea correcto, seguro o útil. Si no escribimos una prueba para un comportamiento, la pipeline no puede inventarla. La calidad del resultado depende de la calidad de las puertas que diseñemos.
+
+GitHub Actions tampoco aloja la aplicación final en esta arquitectura. Ejecuta el proceso de CI/CD y entrega el resultado a Vercel. Cuando termina el job, el runner desaparece; la aplicación continúa ejecutándose en Vercel.
+
+### 3.4 ¿Qué es una pipeline y qué son las puertas de calidad?
+
+Una pipeline suele organizarse en etapas conceptuales:
+
+```mermaid
+flowchart LR
+    A[Código] --> B[Instalación]
+    B --> C{Tipos y tests}
+    C -- Fallan --> X[Pipeline detenida]
+    C -- Pasan --> D[Build]
+    D --> E[Artefacto]
+    E --> F[Deploy]
+    F --> G[Verificación HTTP]
+
+    classDef gate fill:#fff4cc,stroke:#9a6700,color:#24292f
+    classDef failed fill:#ffebe9,stroke:#cf222e,color:#24292f
+    classDef success fill:#dafbe1,stroke:#1a7f37,color:#24292f
+    class C gate
+    class X failed
+    class G success
+```
+
+Cada etapa puede funcionar como una **puerta de calidad**. Si una puerta falla, las etapas posteriores no deberían ejecutarse. Por ejemplo, no tiene sentido publicar una versión que no compila o cuyas pruebas fallan.
+
+Ordenar los controles desde los más rápidos y baratos hacia los más costosos reduce tiempo y consumo de infraestructura. Para este proyecto elegimos:
+
+1. instalar dependencias reproduciblemente con `npm ci`;
+2. validar tipos con `npm run typecheck`;
+3. ejecutar pruebas con `npm test`;
+4. construir para Vercel;
+5. desplegar solamente si todo lo anterior pasó.
+
+### 3.5 Código fuente, build, artefacto y despliegue
+
+También hay que distinguir cuatro objetos:
+
+- **Código fuente:** los archivos que editamos y versionamos.
+- **Build:** el proceso que transforma y prepara ese código.
+- **Artefacto:** el resultado concreto del build, listo para distribuir o ejecutar.
+- **Deployment:** una instalación o publicación identificable de ese artefacto en un ambiente.
+
+El mismo commit debería producir un resultado reproducible. Además, conviene desplegar el artefacto que fue validado, no reconstruir informalmente otra cosa después. En la implementación usaremos `vercel build`, que genera `.vercel/output`, y `vercel deploy --prebuilt`, que publica ese resultado.
+
+### 3.6 Ambientes: Preview y Production
+
+Un **ambiente** es un contexto de ejecución con propósito, configuración y nivel de riesgo propios.
+
+| Ambiente | Propósito general | Decisión adoptada en esta guía |
+| --- | --- | --- |
+| Preview | Evaluar un cambio aislado antes de integrarlo. | Se crea al abrir o actualizar un pull request hacia `master`. |
+| Production | Atender el uso real y representar la versión estable. | Se actualiza con cada push aceptado en `master`. |
+
+Preview no es “una producción más pequeña”: puede tener datos, variables, dominios y permisos diferentes. Su valor está en reducir incertidumbre antes de afectar el ambiente estable.
+
+### 3.7 Vercel y el modelo serverless
+
+**Vercel es la plataforma de ejecución y publicación elegida para esta práctica.** GitHub Actions orquesta; Vercel construye o recibe el artefacto, administra la infraestructura y atiende las solicitudes HTTP.
+
+Un **proyecto de Vercel** agrupa configuración, despliegues, dominios y variables de entorno. Cada deployment es inmutable y tiene identidad propia. Un dominio estable de Production puede apuntar al deployment vigente sin que este deje de conservar su URL individual.
+
+En el modelo *serverless* no administramos un servidor reservado permanentemente. La plataforma controla procesos, puertos, escalado y ciclo de vida. Nuestra unidad desplegable es un manejador invocable. Por eso debemos:
+
+- no iniciar el servidor con `listen` dentro de la función;
+- no usar memoria o disco local como almacenamiento durable;
+- no asumir que solicitudes consecutivas llegan a la misma instancia;
+- externalizar estado persistente en servicios adecuados;
+- respetar límites de tiempo, memoria y tamaño de la plataforma.
+
+`src/app.ts` ya separa la configuración de Express del arranque. Reutilizaremos esa aplicación desde un punto de entrada de Vercel y conservaremos `src/server.ts` para la ejecución local tradicional.
+
+### 3.8 Credenciales, identidad y secretos
+
+Para desplegar, GitHub Actions necesita actuar ante Vercel con una identidad autorizada. Esa autorización se representa mediante un token. Un token no es configuración común: es una credencial y debe cumplir el principio de **mínimo privilegio**.
+
+Los secretos se guardan en GitHub y se inyectan durante la ejecución. No se escriben en el YAML, el código, los logs ni los commits. Que GitHub oculte coincidencias en pantalla no vuelve seguro imprimir un secreto: un workflow malicioso todavía podría enviarlo a otro sistema. Por eso los cambios a workflows también son cambios sensibles y deben revisarse.
+
+### 3.9 Observabilidad, trazabilidad y rollback
+
+Automatizar no termina en “hacer deploy”. Una operación confiable debe poder responder:
+
+- qué commit originó el deployment;
+- qué ejecución lo construyó;
+- qué pruebas pasaron;
+- qué URL y ambiente recibieron el cambio;
+- qué logs explican un fallo;
+- qué versión anterior puede restaurarse.
+
+La **trazabilidad** conecta commit, workflow, artefacto y deployment. La **observabilidad** permite comprender el comportamiento a través de estados, métricas y logs. El **rollback** restaura una versión conocida cuando la actual no es aceptable. Estos conceptos aparecerán nuevamente en la implementación.
+
+> [!NOTE]
+> Una pipeline verde es evidencia, no una prueba absoluta de calidad. Solo verifica aquello que fue incluido explícitamente como control.
+
+## 4. Arquitectura elegida para la práctica
+
+Ya definidos los conceptos, podemos asignar responsabilidades concretas:
+
+| Componente | Responsabilidad en esta arquitectura | Lo que no hace |
+| --- | --- | --- |
+| Git | Versiona el código y su historia. | No ejecuta pruebas ni publica por sí solo. |
+| GitHub | Aloja el repositorio, pull requests y revisiones. | No ejecuta la API de producción. |
+| GitHub Actions | Orquesta validación, build y deploy a partir de eventos. | No aloja permanentemente la aplicación. |
+| Vercel | Ejecuta la API, conserva deployments y administra dominios. | No reemplaza las pruebas ni la revisión de código. |
+
+La implementación elegida usa un único workflow con comportamiento condicional: los pull requests generan Preview y los pushes a `master` generan Production.
+
+```mermaid
+flowchart LR
+    DEV[Desarrollador] -->|push o pull request| GH[(Repositorio GitHub)]
+    GH -->|evento| GA[GitHub Actions]
+
+    subgraph RUNNER[Runner temporal]
+        direction TB
+        I[npm ci] --> T[typecheck]
+        T --> U[tests]
+        U --> P[vercel pull]
+        P --> B[vercel build]
+        B --> D[deploy prebuilt]
+    end
+
+    GA --> RUNNER
+    D --> V[Vercel]
+    V --> PRE[Preview por PR]
+    V --> PROD[Production desde master]
+
+    classDef github fill:#f6f8fa,stroke:#24292f,color:#24292f
+    classDef vercel fill:#24292f,stroke:#24292f,color:#ffffff
+    classDef preview fill:#ddf4ff,stroke:#0969da,color:#24292f
+    classDef production fill:#dafbe1,stroke:#1a7f37,color:#24292f
+    class GH,GA github
+    class V vercel
+    class PRE preview
+    class PROD production
 ```
 
 El principio clave es **promover código verificado**: si los tipos o las pruebas fallan, los pasos de Vercel no se ejecutan.
 
-## 5. Prerrequisitos
+### 4.1 Decisiones de diseño y alternativas
+
+La solución no es la única posible. Elegimos conscientemente:
+
+| Decisión | Motivo didáctico y técnico | Alternativa posible |
+| --- | --- | --- |
+| GitHub Actions como orquestador | El workflow queda versionado junto al código y reacciona a PR y push. | CI nativo de Vercel, GitLab CI, Jenkins u otra plataforma. |
+| Vercel como runtime | Simplifica infraestructura y soporta Express como función administrada. | Contenedor en otra nube, VM o plataforma PaaS. |
+| Preview por pull request | Permite observar el cambio antes de integrarlo. | Desplegar solo ramas seleccionadas o usar un ambiente compartido. |
+| Production desde `master` | Relaciona la rama estable con el ambiente estable. | Tags, releases o aprobación manual. |
+| Build dentro del runner | La misma pipeline valida y genera el artefacto. | Delegar el build a Vercel después de validar. |
+| `deploy --prebuilt` | Publica el artefacto recién construido sin repetir el build. | Desplegar directamente desde el código fuente. |
+
+Una arquitectura se entiende mejor cuando podemos justificar tanto lo elegido como lo descartado.
+
+> [!IMPORTANT]
+> GitHub Actions controla el proceso; Vercel aloja la aplicación. El runner no es el servidor de producción y desaparece al finalizar el job.
+
+## 5. Comenzar la implementación: prerrequisitos
 
 Cada estudiante necesita:
 
@@ -129,7 +351,11 @@ npm run build
 
 `npm ci` instala exactamente las versiones registradas en `package-lock.json`. En CI es preferible a `npm install` porque es reproducible y falla si `package.json` y el *lockfile* no coinciden.
 
-## 6. Preparar Express para Vercel
+## 6. Implementación I: adaptar Express al runtime de Vercel
+
+**Concepto aplicado:** la aplicación y el mecanismo que abre el servidor son responsabilidades separadas. Esta separación permite reutilizar la misma lógica con distintos adaptadores de ejecución.
+
+**Decisión para este proyecto:** conservar `src/server.ts` como entrada local y crear `api/index.ts` como entrada serverless.
 
 Esta preparación se realiza una vez y después se versiona. En la raíz del proyecto, crear la carpeta `api` y el archivo `api/index.ts`:
 
@@ -173,9 +399,18 @@ No hay que copiar ese fragmento sobre el archivo completo: solamente eliminar la
 
 No se reemplaza `src/server.ts`: sigue siendo útil para `npm run dev`. Tenemos dos adaptadores de entrada sobre la misma aplicación:
 
-```text
-Local:   src/server.ts ── app.listen(...) ──► src/app.ts
-Vercel:  api/index.ts  ── export default ───► src/app.ts
+```mermaid
+flowchart LR
+    CORE[src/app.ts<br/>Aplicación Express]
+    LOCAL[src/server.ts<br/>app.listen] --> CORE
+    VERCEL[api/index.ts<br/>export default] --> CORE
+    USER[Cliente local] --> LOCAL
+    HTTP[Solicitud a Vercel] --> VERCEL
+
+    classDef core fill:#fff4cc,stroke:#9a6700,color:#24292f
+    classDef adapter fill:#ddf4ff,stroke:#0969da,color:#24292f
+    class CORE core
+    class LOCAL,VERCEL adapter
 ```
 
 Antes de continuar, guardar y subir la adaptación:
@@ -186,7 +421,9 @@ git commit -m "Preparar API Express para Vercel"
 git push
 ```
 
-## 7. Crear y vincular el proyecto de Vercel
+## 7. Implementación II: crear y vincular el proyecto de Vercel
+
+**Concepto aplicado:** un repositorio y un proyecto desplegable son recursos diferentes. La vinculación establece a qué organización y proyecto debe enviar artefactos la CLI.
 
 ### Opción didáctica recomendada: crear el proyecto desde el panel
 
@@ -226,7 +463,9 @@ Los dos identificadores **no son contraseñas**, pero se guardarán como *secret
 - `VERCEL_ORG_ID`: valor de `orgId`;
 - `VERCEL_PROJECT_ID`: valor de `projectId`.
 
-## 8. Crear el token de Vercel
+## 8. Implementación III: crear la identidad de despliegue
+
+**Concepto aplicado:** un sistema automatizado necesita autenticarse sin intervención humana. El token funciona como credencial de la identidad que realiza el deploy; no es parte de la aplicación.
 
 1. Abrir la configuración de la cuenta de Vercel.
 2. Ir a **Tokens**.
@@ -236,7 +475,9 @@ Los dos identificadores **no son contraseñas**, pero se guardarán como *secret
 
 El token representa a una identidad. Quien lo posea puede realizar las acciones que su alcance permita. No debe escribirse en el YAML, un commit, una captura ni un mensaje.
 
-## 9. Configurar los secrets en GitHub
+## 9. Implementación IV: configurar los secrets en GitHub
+
+**Concepto aplicado:** el workflow necesita recibir credenciales durante la ejecución sin incorporarlas al código ni al historial de Git.
 
 En el repositorio de GitHub:
 
@@ -254,7 +495,28 @@ GitHub cifra los secretos y oculta coincidencias en los logs, pero eso no vuelve
 
 Los secrets no se entregan normalmente a workflows de pull requests provenientes de *forks*. Es una protección deliberada: código no confiable no debe obtener credenciales de despliegue.
 
-## 10. Crear el workflow
+```mermaid
+flowchart LR
+    U[Docente o administrador] -->|guarda una vez| S[(GitHub Actions Secrets)]
+    S -->|inyecta durante el job| R[Runner temporal]
+    R -->|token + IDs| V[API de Vercel]
+    V --> D[Deployment]
+
+    REPO[(Repositorio Git)] -. no contiene valores .-> S
+    LOGS[Logs] -. no deben imprimirlos .-> S
+
+    classDef secret fill:#ffebe9,stroke:#cf222e,color:#24292f
+    classDef safe fill:#dafbe1,stroke:#1a7f37,color:#24292f
+    class S secret
+    class D safe
+```
+
+> [!CAUTION]
+> Si un token aparece en un commit o log, debe considerarse comprometido: revocarlo, crear otro y actualizar el secret. Borrar el texto visible no elimina las copias históricas.
+
+## 10. Implementación V: traducir la pipeline a un workflow
+
+Hasta aquí definimos eventos, etapas, puertas y credenciales. Ahora expresaremos ese diseño como código YAML. El YAML no es la arquitectura: es una implementación declarativa de las decisiones anteriores.
 
 Crear `.github/workflows/deploy-vercel.yml` con el siguiente contenido:
 
@@ -351,7 +613,34 @@ jobs:
 
 Usar `vercel@latest` facilita una clase inicial, pero un proyecto real debería fijar una versión revisada para que una actualización futura de la CLI no cambie el pipeline inesperadamente, por ejemplo `npm install --global vercel@50.1.0`.
 
-## 11. Probar Preview mediante un pull request
+### Dos recorridos, un mismo workflow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as Desarrollador
+    participant GH as GitHub
+    participant GA as GitHub Actions
+    participant VE as Vercel
+
+    alt Pull request hacia master
+        Dev->>GH: push a rama y abre PR
+        GH->>GA: evento pull_request
+        GA->>GA: npm ci + typecheck + tests
+        GA->>VE: build y deploy Preview
+        VE-->>GA: URL única de Preview
+    else Push a master
+        Dev->>GH: merge aprobado
+        GH->>GA: evento push
+        GA->>GA: npm ci + typecheck + tests
+        GA->>VE: build --prod y deploy --prod
+        VE-->>GA: Production actualizada
+    end
+```
+
+## 11. Validación I: probar Preview mediante un pull request
+
+**Concepto aplicado:** una Preview reduce el riesgo al permitir pruebas integradas sobre una versión aislada. No sustituye las pruebas unitarias; verifica otra capa: el sistema ya construido y desplegado.
 
 Crear una rama y un cambio seguro:
 
@@ -403,7 +692,9 @@ Invoke-WebRequest `
 
 Debe responder HTTP 400, no 500. Esto verifica que el manejo de errores funciona también desplegado.
 
-## 12. Publicar Production
+## 12. Validación II: publicar Production
+
+**Concepto aplicado:** Production debe recibir una versión identificable que ya atravesó las puertas de calidad. El merge no es solamente una operación de Git: en esta arquitectura es la decisión que dispara una publicación.
 
 Antes de integrar el pull request verificar:
 
@@ -428,7 +719,12 @@ Invoke-RestMethod `
 
 Una ejecución verde significa que la automatización terminó; la prueba HTTP confirma que el sistema realmente responde. Son verificaciones distintas y ambas importan.
 
-## 13. Variables de entorno
+> [!TIP]
+> La validación tiene dos capas: el workflow confirma el proceso de construcción y la prueba de humo confirma el comportamiento del sistema ya desplegado.
+
+## 13. Configuración por ambiente: variables de entorno
+
+El código debería ser el mismo entre ambientes; lo que cambia es la configuración. Una variable de entorno permite separar el artefacto de valores como URLs, modos de ejecución o credenciales de servicios.
 
 Este bot no requiere variables de aplicación hoy. Cuando se agregue una base de datos o servicio externo:
 
@@ -440,7 +736,9 @@ Este bot no requiere variables de aplicación hoy. Cuando se agregue una base de
 
 Los secrets de GitHub aquí autentican el despliegue. Las variables de Vercel configuran la aplicación cuando se construye o ejecuta. Son propósitos distintos.
 
-## 14. Seguridad y controles recomendados
+## 14. Seguridad: proteger la cadena de suministro
+
+La cadena de suministro de software incluye código, dependencias, actions, runners, credenciales y plataforma de destino. Proteger solo el endpoint desplegado no alcanza si un cambio malicioso del workflow puede apropiarse del token de producción.
 
 - Proteger `master`: exigir pull request, revisión y checks exitosos.
 - Limitar quién puede modificar `.github/workflows/` mediante `CODEOWNERS` o revisiones obligatorias.
@@ -454,7 +752,7 @@ Los secrets de GitHub aquí autentican el despliegue. Las variables de Vercel co
 
 Una evolución recomendable es separar los jobs `ci`, `preview` y `production`, usar ambientes GitHub `preview`/`production` y agregar aprobación obligatoria al segundo. Esta guía los mantiene unidos para que el flujo inicial resulte visible de punta a punta.
 
-## 15. Rollback
+## 15. Recuperación: rollback
 
 Un rollback no consiste en editar archivos directamente en un servidor. Vercel conserva despliegues inmutables, por lo que hay dos estrategias:
 
@@ -479,7 +777,26 @@ git push origin master
 
 Después de cualquier rollback, repetir la prueba HTTP y confirmar qué versión atiende el dominio de Production.
 
-## 16. Resolución de problemas
+```mermaid
+flowchart TD
+    A[Incidente en Production] --> B{¿Se necesita recuperar ya?}
+    B -- Sí --> C[Promover deployment estable anterior]
+    B -- No --> D[Preparar corrección]
+    C --> E[Verificar endpoint y dominio]
+    D --> F[git revert o nuevo fix]
+    F --> G[Pipeline normal]
+    G --> E
+    E --> H[Registrar causa y acciones]
+
+    classDef incident fill:#ffebe9,stroke:#cf222e,color:#24292f
+    classDef recovered fill:#dafbe1,stroke:#1a7f37,color:#24292f
+    class A incident
+    class E,H recovered
+```
+
+## 16. Operación: resolución de problemas
+
+Diagnosticar una pipeline consiste en ubicar la primera frontera que no cumplió su contrato: fuente, instalación, validación, build, autenticación, deploy o ejecución. Conviene evitar cambios al azar y avanzar usando evidencia.
 
 | Síntoma | Causa probable | Diagnóstico o solución |
 | --- | --- | --- |
@@ -504,6 +821,20 @@ Para investigar ordenadamente:
 4. consultar logs de construcción y de ejecución por separado;
 5. reproducir localmente el comando fallido;
 6. aplicar una corrección pequeña y volver a verificar.
+
+```mermaid
+flowchart TD
+    START[La ejecución falló] --> Q1{¿Falló antes del deploy?}
+    Q1 -- Sí --> Q2{¿Instalación, tipos o tests?}
+    Q2 --> LOCAL[Reproducir el comando localmente]
+    Q1 -- No --> Q3{¿El deployment terminó?}
+    Q3 -- No --> AUTH[Revisar token, IDs y build logs]
+    Q3 -- Sí --> HTTP{¿Responde el endpoint?}
+    HTTP -- 404 --> ROUTE[Revisar api/index.ts y rewrites]
+    HTTP -- 400 --> INPUT[Revisar contrato y JSON]
+    HTTP -- 500 --> LOGS[Revisar runtime logs]
+    HTTP -- 200 --> OK[Confirmar URL y ambiente correctos]
+```
 
 ## 17. Mejoras posibles al pipeline
 
@@ -542,12 +873,16 @@ Documentar qué deployment estable elegirían, cómo confirmarían su commit y q
 
 ### Preguntas para discutir
 
-1. ¿Por qué `npm ci` ofrece mayor reproducibilidad en CI?
-2. ¿Por qué `src/server.ts` no debe ser la función de Vercel?
-3. ¿Qué problema evita `--prebuilt`?
-4. ¿Por qué Preview y Production deberían tener credenciales separadas?
-5. ¿Qué garantiza un workflow verde y qué no garantiza?
-6. ¿Qué riesgo aparece si cualquier PR puede modificar el workflow y acceder a Production?
+1. ¿Por qué GitHub Actions es más que un integrador entre GitHub y Vercel?
+2. ¿Qué diferencia existe entre un workflow, un job, un step y una action?
+3. ¿Qué información persiste cuando el runner desaparece?
+4. ¿En qué momento este flujo deja de ser CI y comienza a ser CD?
+5. ¿Por qué `npm ci` ofrece mayor reproducibilidad en CI?
+6. ¿Por qué `src/server.ts` no debe ser la función de Vercel?
+7. ¿Qué problema evita `--prebuilt`?
+8. ¿Por qué Preview y Production deberían tener credenciales separadas?
+9. ¿Qué garantiza un workflow verde y qué no garantiza?
+10. ¿Qué riesgo aparece si cualquier PR puede modificar el workflow y acceder a Production?
 
 ## 19. Checklist final
 
@@ -585,4 +920,4 @@ Documentar qué deployment estable elegirían, cómo confirmarían su commit y q
 
 ## 20. Resultado esperado
 
-Al finalizar tendremos un proceso repetible y auditable: cada propuesta se valida y obtiene su propio ambiente Preview; solo el código integrado en `master` llega a Production; las credenciales permanecen fuera del repositorio; y cada despliegue puede rastrearse hasta un commit y una ejecución de GitHub Actions.
+Al finalizar tendremos tanto un modelo conceptual como una implementación concreta. Podremos explicar por qué GitHub Actions orquesta la pipeline, por qué Vercel ejecuta la aplicación, cómo un evento se convierte en jobs y steps, dónde aparecen las puertas de calidad y qué artefacto llega a cada ambiente. Sobre esa base, el proceso será repetible y auditable: cada propuesta se valida y obtiene su propio ambiente Preview; solo el código integrado en `master` llega a Production; las credenciales permanecen fuera del repositorio; y cada despliegue puede rastrearse hasta un commit y una ejecución de GitHub Actions.
